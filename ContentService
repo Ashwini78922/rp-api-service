@@ -1,0 +1,37 @@
+package com.scb.channels.research.service;
+
+import com.scb.channels.research.model.ContentValue;
+import com.scb.channels.research.model.ResourceIdentifier;
+import com.scb.channels.research.model.analyst.Analyst;
+import com.scb.channels.research.model.forecast.CompositeForecast;
+import com.scb.channels.research.model.publication.CompositePublicationType;
+import com.scb.channels.research.model.region.RegionPortalMenu;
+import com.scb.channels.research.model.researchreason.CompositeResearchReason;
+import com.scb.channels.research.model.tradeIdeas.CompositeTradeIdea;
+
+import java.io.ByteArrayOutputStream;
+
+public interface ContentService {
+
+     CompositeResearchReason researchReasons(String userId);
+
+     CompositePublicationType publicationTypes(String userId);
+
+     Analyst analyst(String userId, ResourceIdentifier resourceIdentifier);
+
+     CompositeTradeIdea tradeIdea(String userId, ResourceIdentifier resourceIdentifier);
+
+     CompositeForecast forecast(String userId, ResourceIdentifier resourceIdentifier);
+
+     RegionPortalMenu regionsAndCountries(String userId);
+
+     String getAnalystGivenCountryId(String userId, String countryId);
+
+     String getAnalystGivenAssetClass(String userId, String assetClass);
+
+     String getSubscriptionMenus(String userId);
+
+     ByteArrayOutputStream getReport(String userId, String documentId);
+
+     ContentValue getConfSession(String userId);
+}
