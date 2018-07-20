@@ -1,0 +1,11 @@
+package com.scb.channels.research.service;
+
+
+import com.scb.channels.research.resource.model.NotificationInfo;
+
+public interface NotificationService {
+
+    public NotificationInfo getNotificationInfo(String reportId);
+
+    public NotificationInfo updateNotificationInfo(NotificationInfo notificationInfo);
+}
