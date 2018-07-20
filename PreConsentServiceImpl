@@ -1,0 +1,79 @@
+package com.scb.channels.research.service;
+
+
+import com.scb.channels.research.model.clientform.ClientSignUpForm;
+import com.scb.channels.research.model.clientform.ClientSignUpResponse;
+import com.scb.channels.research.model.clientform.VisualCaptcha;
+import com.scb.channels.research.model.clientform.VisualCaptchaResponse;
+import com.scb.channels.research.repository.PreConsentRepository;
+import com.scb.channels.research.utils.AESEncryptionUtils;
+import com.scb.channels.research.utils.Base64Utils;
+import com.scb.channels.research.utils.RpApiConstants;
+import nl.captcha.Captcha;
+import nl.captcha.backgrounds.GradiatedBackgroundProducer;
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.awt.image.BufferedImage;
+
+@Component
+public class PreConsentServiceImpl implements PreConsentService {
+
+    @Autowired
+    private PreConsentRepository preConsentRepository;
+
+
+    private static final Logger LOG = LoggerFactory.getLogger(PreConsentServiceImpl.class);
+
+
+    @Override
+    public VisualCaptchaResponse generateVisualCaptcha() {
+        Captcha captcha = new Captcha.Builder(200, 50).addText()
+                .addBackground(new GradiatedBackgroundProducer()).gimp()
+                .addNoise().build();
+        String visualAnswer = captcha.getAnswer();
+
+        String encVisualAnswer = AESEncryptionUtils.encrypt(visualAnswer);
+
+        BufferedImage image = captcha.getImage();
+        String encString = Base64Utils.encodeToString(image, "png");
+        return VisualCaptchaResponse.builder().encString(encString).encVisualAnswer(encVisualAnswer).build();
+    }
+
+    @Override
+    public boolean isValid(ClientSignUpForm clientSignUpForm) {
+        return (clientSignUpForm != null) && !(clientSignUpForm.getRmEmail() == null && clientSignUpForm.getRmName() == null);
+    }
+
+    @Override
+    public ClientSignUpResponse validateAnswer(ClientSignUpForm clientSignUpForm) {
+        if (!isValidAnswer(clientSignUpForm.getEncVisualAnswer(), clientSignUpForm.getCaptchaAnswer())) {
+            LOG.info("Visual captcha validation failed [{}]", clientSignUpForm.getCaptchaAnswer());
+            return ClientSignUpResponse.builder().build().addErrorResponse(RpApiConstants.CAPTCHA, "Visual captcha validation failed");
+        }
+
+        if (isUsed(clientSignUpForm.getCaptchaAnswer())) {
+            LOG.info("Visual answer is already used by another user recently [{}]", clientSignUpForm.getCaptchaAnswer());
+            return ClientSignUpResponse.builder().build().addErrorResponse(RpApiConstants.CAPTCHA, "Visual answer is already used by another user recently");
+        }
+        LOG.info("Visual captcha validation is successful [{}]", clientSignUpForm.getCaptchaAnswer());
+        return ClientSignUpResponse.builder().transactionSuccess(true).build();
+    }
+
+    private boolean isValidAnswer(String encVisualAnswer, String captchaAnswer) {
+        return StringUtils.equals(AESEncryptionUtils.decrypt(encVisualAnswer), captchaAnswer);
+    }
+
+    private boolean isUsed(String captchaAnswer) {
+        VisualCaptcha visualCaptcha = preConsentRepository.loadCaptchaByVisual(captchaAnswer);
+        return visualCaptcha != null && StringUtils.equals(visualCaptcha.getVisualAnswer(), captchaAnswer);
+    }
+
+    @Override
+    public void persistCaptcha(String visualAnswer) {
+        preConsentRepository.persistCaptcha(VisualCaptcha.builder().visualAnswer(visualAnswer).build());
+    }
+}
