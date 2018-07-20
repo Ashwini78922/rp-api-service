@@ -1,0 +1,9 @@
+package com.scb.channels.research.service;
+
+import com.scb.channels.research.model.healthcheck.CassandraHealthCheckResponse;
+
+public interface HealthCheckService {
+
+    public CassandraHealthCheckResponse getCassandraConnectionStatus();
+
+}
