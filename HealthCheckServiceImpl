@@ -1,0 +1,65 @@
+package com.scb.channels.research.service;
+
+import com.datastax.driver.core.Host;
+import com.scb.channels.research.healthCheck.CassandraHealthCheck;
+import com.scb.channels.research.model.healthcheck.CassandraConnectionMetaData;
+import com.scb.channels.research.model.healthcheck.CassandraHealthCheckInfo;
+import com.scb.channels.research.model.healthcheck.CassandraHealthCheckResponse;
+import com.scb.channels.research.user.config.UserServiceCassandraConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
+
+@Component
+public class HealthCheckServiceImpl implements HealthCheckService {
+    private static final Logger LOG = LoggerFactory.getLogger(HealthCheckServiceImpl.class);
+
+    @Autowired
+    private CassandraHealthCheck cassandraHealthCheck;
+
+    @Autowired
+    UserServiceCassandraConfig userServiceCassandraConfig;
+
+    @Override
+    public CassandraHealthCheckResponse getCassandraConnectionStatus() {
+        LOG.info("Started processing request for cassandra health check");
+        String[] address = userServiceCassandraConfig.getContactPointsAsArray();
+        int hostCount = address.length;
+        List<CassandraHealthCheckInfo> cassandraHealthCheckInfo = null;
+        List<String> errors = null;
+        for (int i = 0; i < hostCount; i++) {
+            if (null != cassandraHealthCheckInfo && !cassandraHealthCheckInfo.isEmpty()) break;
+            try {
+                CassandraConnectionMetaData cassandraConnectionMetaData = CassandraConnectionMetaData.builder().host(address[i])
+                        .password(userServiceCassandraConfig.getPassword())
+                        .userName(userServiceCassandraConfig.getUserName())
+                        .port(userServiceCassandraConfig.getPort()).build();
+
+                cassandraHealthCheckInfo = cassandraHealthCheck.getAvailableHosts(cassandraConnectionMetaData).stream().map(this::buildCassandraHealthCheckResponse).collect(Collectors.toList());
+            } catch (Exception e) {
+                if (null == errors) {
+                    errors = new ArrayList<>();
+                }
+                errors.add(e.getMessage());
+                LOG.error("Error in processing request for cassandra health check", e);
+            }
+
+        }
+        LOG.info("Finished processing request for cassandra health check");
+        return CassandraHealthCheckResponse.builder().response(cassandraHealthCheckInfo).errors(errors).build();
+    }
+
+    private CassandraHealthCheckInfo buildCassandraHealthCheckResponse(Host host) {
+        return CassandraHealthCheckInfo.builder()
+                .host(host.getAddress().getHostName())
+                .dataCenter(host.getDatacenter())
+                .rack(host.getRack())
+                .state(host.getState()).build();
+    }
+
+}
