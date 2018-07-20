@@ -1,0 +1,259 @@
+package com.scb.channels.research.service;
+
+import com.jayway.jsonpath.JsonPath;
+import com.scb.channels.foundation.api.dto.contentcache.ResourceFilter;
+import com.scb.channels.foundation.util.jackson.Marshaller;
+import com.scb.channels.research.model.ContentValue;
+import com.scb.channels.research.model.ResourceIdentifier;
+import com.scb.channels.research.model.User;
+import com.scb.channels.research.model.analyst.Analyst;
+import com.scb.channels.research.model.analyst.AnalystAssetClassCoverage;
+import com.scb.channels.research.model.analyst.AnalystCountryCoverage;
+import com.scb.channels.research.model.forecast.CompositeForecast;
+import com.scb.channels.research.model.publication.CompositePublicationType;
+import com.scb.channels.research.model.region.*;
+import com.scb.channels.research.model.researchreason.CompositeResearchReason;
+import com.scb.channels.research.model.tradeIdeas.CompositeTradeIdea;
+import com.scb.channels.research.resource.FilterResource;
+import com.scb.channels.research.service.client.ContentCacheClient;
+import com.scb.channels.research.user.service.UserService;
+import com.scb.channels.research.utils.PDFUtil;
+import com.scb.channels.research.utils.RpApiConstants;
+import net.minidev.json.JSONObject;
+import net.minidev.json.JSONValue;
+import org.apache.commons.lang.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.io.ByteArrayOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.stream.Collectors;
+
+import static com.scb.channels.research.utils.RpApiConstants.*;
+
+@Component
+public class ContentServiceImpl implements ContentService {
+
+    @Autowired
+    private ContentCacheClient contentCacheClient;
+
+    @Autowired
+    private Marshaller marshaller;
+
+    @Autowired
+    private FilterResource filterResource;
+
+    @Autowired
+    private UserService userService;
+
+    private static final Logger LOG = LoggerFactory.getLogger(ContentServiceImpl.class);
+
+    @Override
+    public CompositeResearchReason researchReasons(String userId) {
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .category(RESEARCH_REASONS)
+                .build();
+        CompositeResearchReason value = contentCacheClient.getCompositeContentByCategory(userId, identifier, CompositeResearchReason.class);
+        return filterResource.getActiveResearchReasons(value);
+    }
+
+    @Override
+    public CompositePublicationType publicationTypes(String userId) {
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .category(PUBLICATION_TYPES)
+                .build();
+        return contentCacheClient.getCompositeContentByCategory(userId, identifier, CompositePublicationType.class);
+    }
+
+    @Override
+    public Analyst analyst(String userId, ResourceIdentifier resourceIdentifier) {
+        Analyst analyst = contentCacheClient.getContentByCategoryAndResourceId(userId, resourceIdentifier, Analyst.class);
+        return filterResource.checkIfAnalystIsActive(analyst) ? analyst : null;
+    }
+
+    @Override
+    public CompositeTradeIdea tradeIdea(String userId, ResourceIdentifier resourceIdentifier) {
+        CompositeTradeIdea tradeIdeas = contentCacheClient.getCompositeContentByCategoryAndSubcategory(userId, resourceIdentifier, CompositeTradeIdea.class);
+        return filterResource.getActiveTradeIdeas(tradeIdeas);
+    }
+
+    @Override
+    public CompositeForecast forecast(String userId, ResourceIdentifier resourceIdentifier) {
+        return contentCacheClient.getContentByCategoryAndSubcategory(userId, resourceIdentifier, CompositeForecast.class);
+    }
+
+    @Override
+    public RegionPortalMenu regionsAndCountries(String userId) {
+        ResourceIdentifier portalMenuIdentifier = ResourceIdentifier.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .category(RpApiConstants.PORTAL_MENU)
+                .build();
+        RegionPortalMenu portalMenuRequest = contentCacheClient.getCompositeContentByCategory(userId, portalMenuIdentifier, RegionPortalMenu.class);
+
+        ResourceIdentifier regionAndCountryIdentifier = ResourceIdentifier.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .category(RpApiConstants.REGIONS_AND_COUNTRIES)
+                .documentId("0")
+                .build();
+
+        RegionAndCountry regionsAndCountries = contentCacheClient.getContentByCategoryAndResourceId(userId, regionAndCountryIdentifier, RegionAndCountry.class);
+
+        Map<String, String> idNameMap = regionsAndCountries.getValue().stream().collect(Collectors.toMap(RegionPortalMenuValue::getId, RegionPortalMenuValue::getName));
+
+        portalMenuRequest.getValue().forEach(regionPortalMenuValue -> {
+            regionPortalMenuValue.setName(idNameMap.get(regionPortalMenuValue.getRegionId()));
+            regionPortalMenuValue.getSubMenuList().forEach(subMenuList -> {
+                subMenuList.setName(idNameMap.get(subMenuList.getSubRegionId()));
+                subMenuList.getCountryIdList().forEach(id -> {
+                    CountryList countryList = CountryList.builder()
+                            .countryId(id)
+                            .name(idNameMap.get(id)).build();
+                    subMenuList.getCountryList().add(countryList);
+                });
+                subMenuList.clearCountryList();
+            });
+        });
+        return portalMenuRequest;
+    }
+
+    @Override
+    public String getAnalystGivenCountryId(String userId, String countryId) {
+        ResourceIdentifier resourceIdentifier = ResourceIdentifier.builder()
+                .category(ANALYST_COUNTRY_COVERAGE_MAP)
+                .applicationId(RP_APPLICATION_ID)
+                .build();
+        AnalystCountryCoverage countryCoverage = contentCacheClient.getCompositeContentByCategory(userId, resourceIdentifier, AnalystCountryCoverage.class);
+        List<String> analystIds = countryCoverage.getValue().stream().filter(c -> c.getCountryId().equalsIgnoreCase(countryId)).map(c -> c.getAnalystId()).collect(Collectors.toList());
+
+        return getAnalysts(userId, analystIds);
+    }
+
+
+    public String getAnalystGivenAssetClass(String userId, String assetClass) {
+        ResourceIdentifier resourceIdentifier = ResourceIdentifier.builder()
+                .category(ANALYST_ASSET_CLASS_COVERAGE_MAP)
+                .applicationId(RP_APPLICATION_ID)
+                .build();
+        AnalystAssetClassCoverage assetCoverage = contentCacheClient.getCompositeContentByCategory(userId, resourceIdentifier, AnalystAssetClassCoverage.class);
+        List<String> analystIds = assetCoverage.getValue().stream().filter(c -> c.getAssetClassCode().equalsIgnoreCase(assetClass)).map(c -> c.getAnalystId()).collect(Collectors.toList());
+        return getAnalysts(userId, analystIds);
+    }
+
+
+    private String getAnalysts(String userId, List<String> analystIds) {
+        if (analystIds == null || analystIds.isEmpty()) return null;
+        ResourceFilter resourceFilter = ResourceFilter.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .classification(ANALYSTS)
+                .resourceId(analystIds)
+                .build();
+
+        return contentCacheClient.getContentList(userId, resourceFilter, String.class);
+    }
+
+    @Override
+    public String getSubscriptionMenus(String userId) {
+        List<String> assetList = Arrays.asList("Credit", "Fx", "Rates", "Commodities", "Economics");
+        JSONObject subscriptionMenus = new JSONObject();
+        assetList.stream().forEach(assetClassCode -> {
+            ContentValue subscriptionMenu = getSubscriptionMenu(userId, assetClassCode);
+            if (subscriptionMenu != null)
+                subscriptionMenus.put(assetClassCode, subscriptionMenu.getValue());
+        });
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("values", subscriptionMenus);
+        return JSONValue.toJSONString(jsonObject);
+    }
+
+
+    @Override
+    public ByteArrayOutputStream getReport(String userId, String documentId) {
+        User user = userService.loadActiveUserById(userId);
+        if (user == null) {
+            return null;
+        }
+        String textForWaterMark = String.format("Downloaded by %s at %s [%s]",user.getName(),user.getCompanyName(),getCurrentTimeInGMT());
+
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .documentId(documentId + ".pdf")
+                .build();
+
+        byte[] file = contentCacheClient.getFile(userId, identifier);
+        return (null != file) ? PDFUtil.print(textForWaterMark, file) : null;
+    }
+
+    @Override
+    public ContentValue getConfSession(String userId) {
+        ResourceIdentifier resourceIdentifier = ResourceIdentifier.builder()
+                .category(CATEGORY_CONF_SESSION)
+                .applicationId(RP_APPLICATION_ID)
+                .build();
+        ContentValue contentValue = contentCacheClient.getCompositeContentByCategory(userId, resourceIdentifier, ContentValue.class);
+        return applyEntitlement(userId, contentValue);
+    }
+
+
+    private String getCurrentTimeInGMT() {
+        final Date currentTime = new Date();
+        final SimpleDateFormat sdf =
+                new SimpleDateFormat("dd MMM yyyy HH:mm z");
+        sdf.setTimeZone(TimeZone.getTimeZone("GMT"));
+        return sdf.format(currentTime);
+    }
+
+    private ContentValue getSubscriptionMenu(String userId, String assetClass) {
+        ResourceIdentifier identifier = ResourceIdentifier.builder()
+                .category(SUBSCRIPTION_MENU_CATEGORY)
+                .applicationId(RP_APPLICATION_ID)
+                .subCategory(assetClass)
+                .build();
+        return contentCacheClient.getCompositeContentByCategoryAndSubcategory(userId, identifier, ContentValue.class);
+    }
+
+    private ContentValue applyEntitlement(String userId, ContentValue contentValue) {
+        List<String> linkedReportIds = getLinkedReportIds(contentValue);
+        if (linkedReportIds == null || linkedReportIds.isEmpty()) return ContentValue.builder().build();
+        ResourceFilter resourceFilter = ResourceFilter.builder()
+                .applicationId(RP_APPLICATION_ID)
+                .classification(CATEGORY_REPORT)
+                .resourceId(linkedReportIds)
+                .build();
+        List<Integer> entitledReportIds = JsonPath.parse(validatePayload(contentCacheClient.getContentList(userId, resourceFilter, String.class)))
+                .read(PATH_REPORT_ID);
+
+        contentValue.getValue().removeIf(data -> {
+            try {
+                return !entitledReportIds.contains((Integer) data.get(REPORT_ID));
+            } catch (Exception e) {
+                LOG.error("Exception while applying entitlement ", e);
+            }
+            return true;
+        });
+        return contentValue;
+    }
+
+    private List<String> getLinkedReportIds(ContentValue contentValue) {
+        List<String> linkedReportIds = new ArrayList<>();
+        if (contentValue == null || contentValue.getValue() == null) return linkedReportIds;
+
+        contentValue.getValue().forEach(data -> {
+            try {
+                String reportId = data.getAsString(REPORT_ID);
+                linkedReportIds.add(reportId);
+            } catch (Exception e) {
+                LOG.error("Unable to fetch reportId :", e);
+            }
+        });
+        return linkedReportIds;
+    }
+
+    private String validatePayload(String json) {
+        return StringUtils.isEmpty(json) ? RpApiConstants.EMPTY_PAYLOAD : json;
+    }
+}
